@@ -1,0 +1,111 @@
+{
+  "exercise_date": "2026-09-23",
+  "customers": {
+    "priya.nair": {
+      "name": "Priya Nair",
+      "loyalty_tier": "Gold",
+      "booking_reference": "SK4821X",
+      "contact": {
+        "email": "priya.nair@example.com",
+        "phone": "+91-98xxxxxxx1"
+      },
+      "travel_history_last_12_months": {
+        "flights": 6,
+        "prior_complaints": [
+          {"issue": "delayed baggage", "resolution": "resolved with voucher"}
+        ]
+      }
+    },
+    "arvind.kulkarni": {
+      "name": "Arvind Kulkarni",
+      "loyalty_tier": "Silver",
+      "booking_reference": "TR1190B",
+      "contact": {
+        "email": "arvind.kulkarni@example.com",
+        "phone": "+91-98xxxxxxx2"
+      },
+      "travel_history_last_12_months": {
+        "flights": 3,
+        "prior_complaints": []
+      }
+    },
+    "meher.kaur": {
+      "name": "Meher Kaur",
+      "loyalty_tier": "Platinum",
+      "booking_reference": "WL7742",
+      "contact": {
+        "email": "meher.kaur@example.com",
+        "phone": "+91-98xxxxxxx3"
+      },
+      "travel_history_last_12_months": {
+        "flights": 10,
+        "prior_complaints": [
+          {"issue": "overbooking", "resolution": "resolved with a tier-status upgrade"}
+        ]
+      }
+    }
+  },
+  "bookings": [
+    {
+      "customer": "Priya Nair",
+      "pnr": "SK4821X",
+      "flight": "SK-204",
+      "route": "Delhi -> Goa",
+      "date": "2026-09-23",
+      "scheduled_departure": "18:40",
+      "status": "Cancelled (operational reasons)"
+    },
+    {
+      "customer": "Priya Nair",
+      "pnr": "SK4821X",
+      "flight": "Return",
+      "route": "Goa -> Delhi",
+      "date": "2026-09-25",
+      "scheduled_departure": "16:20",
+      "status": "Unaffected"
+    },
+    {
+      "customer": "Arvind Kulkarni",
+      "pnr": "TR1190B",
+      "flight": "SK-118",
+      "route": "Mumbai -> Bengaluru",
+      "date": "2026-09-23",
+      "scheduled_departure": "07:10",
+      "status": "Delayed 4h (new departure 11:10)"
+    },
+    {
+      "customer": "Meher Kaur",
+      "pnr": "WL7742",
+      "flight": "SK-305",
+      "route": "Delhi -> Hyderabad",
+      "date": "2026-09-23",
+      "scheduled_departure": "14:00",
+      "status": "Delayed 6h (new departure 20:00)"
+    }
+  ],
+  "service_rules": {
+    "cancellation_rebooking_rule": "If a flight is cancelled by the airline, the customer is entitled to a free rebooking on the next available flight within 24 hours, or a full refund, customer's choice.",
+    "delay_compensation_rule": {
+      "under_3_hours": "meal voucher (Rs. 500)",
+      "more_than_3_hours": "meal voucher + lounge access",
+      "more_than_5_hours": "meal voucher + hotel accommodation, covering only the delayed hours (not a full night's stay)"
+    },
+    "refund_processing_rule": "Refunds for airline-caused cancellations are processed in full within 7 business days. Refunds are issued to the original payment method only.",
+    "fare_difference_rule": "If a customer voluntarily chooses to rebook on a higher-fare flight (not airline-caused), they must pay the fare difference. Agents cannot waive fare differences above Rs. 1500 without supervisor approval.",
+    "loyalty_tier_rule": "Gold and Platinum tier customers get priority rebooking (first access to next-available seats) but no additional compensation beyond the standard policy."
+  },
+  "allowed_actions": [
+    "Rebook the customer on the next available flight within 24 hours at no charge (airline-caused disruption)",
+    "Issue meal vouchers and lounge access per the delay compensation rule, where the delay qualifies",
+    "Arrange hotel accommodation for the delayed-hours compensation rule, where the delay qualifies",
+    "Initiate a refund request for airline-caused cancellations",
+    "Provide the customer's own booking and flight status information"
+  ],
+  "prohibited_actions": [
+    "Approving any compensation beyond the stated policy amounts",
+    "Waiving a fare difference above Rs. 1500",
+    "Making exceptions for non-airline-caused disruptions (e.g., customer missed the flight)",
+    "Handling threats of legal action or formal complaints - must be escalated immediately",
+    "Processing refunds to a different payment method than the original"
+  ]
+}
