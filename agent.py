@@ -43,8 +43,18 @@ def detect_intents(message):
         intents.append("delay")
     if any(k in msg for k in ["refund", "cash back", "money back"]):
         intents.append("refund")
-    if any(k in msg for k in ["upgrade", "business class", "higher fare", "higher-fare", "different flight"]):
-        intents.append("fare_upgrade")
+
+    # --- FIX 1: separate "free/goodwill upgrade" from "paid voluntary upgrade" ---
+    free_upgrade_signals = ["for the trouble", "free upgrade", "complimentary", "as compensation",
+                             "for my trouble", "no charge", "waive", "for free"]
+    upgrade_signals = ["upgrade", "business class", "higher fare", "higher-fare", "different flight"]
+
+    if any(k in msg for k in upgrade_signals):
+        if any(k in msg for k in free_upgrade_signals):
+            intents.append("goodwill_compensation_request")
+        else:
+            intents.append("fare_upgrade")
+
     if any(k in msg for k in ["hotel", "accommodation", "full night", "overnight stay"]):
         intents.append("hotel")
     if any(k in msg for k in ["status", "where is my flight", "flight status"]):
@@ -125,9 +135,21 @@ def build_response(pnr, message):
             )
             log.append("Denied full-night stay")
 
+    # --- FIX 1 continued: goodwill/free compensation requests must escalate, never be auto-handled ---
+    if "goodwill_compensation_request" in intents:
+        reply_parts.append(
+            "I understand you'd like additional compensation, but I'm not authorized to approve "
+            "anything beyond our standard policy on my own. I'm escalating this specific request to "
+            "a supervisor for review."
+        )
+        actions_taken.append("escalate_goodwill_compensation")
+        needs_escalation = True
+        log.append("Escalated: customer requested free/goodwill compensation beyond policy (e.g. free upgrade)")
+
     if "fare_upgrade" in intents:
-        numbers = re.findall(r'(\d{2,6})', message)
-        fare_diff = int(numbers[-1]) if numbers else None
+        # --- FIX 2: handle comma-separated numbers like "2,000" correctly ---
+        numbers = re.findall(r'\d{1,3}(?:,\d{3})+|\d+', message)
+        fare_diff = int(numbers[-1].replace(",", "")) if numbers else None
 
         if fare_diff is not None and fare_diff > 1500:
             reply_parts.append(
