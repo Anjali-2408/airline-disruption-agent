@@ -107,5 +107,95 @@
     "Making exceptions for non-airline-caused disruptions (e.g., customer missed the flight)",
     "Handling threats of legal action or formal complaints - must be escalated immediately",
     "Processing refunds to a different payment method than the original"
-  ]
+  ],
+  "policy_catalog": {
+    "SR-01": {
+      "name": "Cancellation Rebooking",
+      "text": "Airline-cancelled flight: free rebooking on next available flight within 24 hours, OR full refund - customer's choice."
+    },
+    "SR-02": {
+      "name": "Delay Compensation (under 3 hours)",
+      "text": "Delay under 3 hours: meal voucher (Rs. 500)."
+    },
+    "SR-03": {
+      "name": "Delay Compensation (3 to 5 hours)",
+      "text": "Delay more than 3 hours: meal voucher + lounge access."
+    },
+    "SR-04": {
+      "name": "Delay Compensation (over 5 hours)",
+      "text": "Delay more than 5 hours: meal voucher + hotel accommodation covering only the delayed hours, not a full night's stay."
+    },
+    "SR-05": {
+      "name": "Refund Processing",
+      "text": "Airline-caused cancellation refunds: full amount within 7 business days, to the original payment method only."
+    },
+    "SR-06": {
+      "name": "Fare Difference Limit",
+      "text": "Voluntary rebooking on a higher-fare flight: customer pays the fare difference. Agent cannot waive above Rs. 1500 without supervisor approval."
+    },
+    "SR-07": {
+      "name": "Loyalty Tier Priority",
+      "text": "Gold and Platinum get priority rebooking (first access to next-available seats), but no extra compensation beyond standard policy."
+    },
+    "AA-01": {
+      "name": "ALLOWED: Free rebooking within 24h",
+      "text": "Rebook the customer on the next available flight within 24 hours at no charge (airline-caused disruption)."
+    },
+    "AA-02": {
+      "name": "ALLOWED: Meal voucher / lounge access",
+      "text": "Issue meal vouchers and lounge access per the delay compensation rule, where the delay qualifies."
+    },
+    "AA-03": {
+      "name": "ALLOWED: Hotel accommodation",
+      "text": "Arrange hotel accommodation for the delayed-hours compensation rule, where the delay qualifies."
+    },
+    "AA-04": {
+      "name": "ALLOWED: Initiate refund",
+      "text": "Initiate a refund request for airline-caused cancellations."
+    },
+    "AA-05": {
+      "name": "ALLOWED: Provide booking / flight status",
+      "text": "Provide the customer's own booking and flight status information."
+    },
+    "P-01": {
+      "name": "PROHIBITED: Compensation beyond policy",
+      "text": "Approving any compensation beyond the stated policy amounts. Must be escalated."
+    },
+    "P-02": {
+      "name": "PROHIBITED: Fare difference waiver above Rs. 1500",
+      "text": "Waiving a fare difference above Rs. 1500. Must be escalated to a supervisor."
+    },
+    "P-03": {
+      "name": "PROHIBITED: Exceptions for non-airline-caused disruptions",
+      "text": "Making exceptions for non-airline-caused disruptions (e.g. customer missed the flight). Must be escalated."
+    },
+    "P-04": {
+      "name": "PROHIBITED: Legal action / formal complaint",
+      "text": "Threats of legal action or formal complaints must be escalated immediately."
+    },
+    "P-05": {
+      "name": "PROHIBITED: Refund to a different payment method",
+      "text": "Processing refunds to a payment method other than the original. Must be escalated."
+    },
+    "SYS-01": {
+      "name": "System: PNR not found",
+      "text": "No customer record matched the booking reference provided."
+    },
+    "SYS-02": {
+      "name": "System: Empty message",
+      "text": "No message content received from the customer."
+    },
+    "SYS-03": {
+      "name": "System: Conversation already escalated",
+      "text": "Conversation is already with a human specialist. No further automated action is taken."
+    },
+    "SYS-04": {
+      "name": "System: No confident intent match",
+      "text": "The message did not match any known intent with confidence. Agent asked a clarifying question instead of guessing."
+    },
+    "GRD-01": {
+      "name": "Output Guardrail - Reply Scan",
+      "text": "Second-line safety check: before any reply reaches the customer, its actual text is scanned - independent of which intent path produced it - for language that would promise free/waived compensation, an unescalated amount above Rs. 1500, or a refund to a different payment method. This exists so a future bug in intent detection can't silently let a prohibited promise reach the customer."
+    }
+  }
 }

@@ -1,0 +1,643 @@
+﻿
+===== data.json =====
+
+{
+  "exercise_date": "2026-09-23",
+  "customers": {
+    "priya.nair": {
+      "name": "Priya Nair",
+      "loyalty_tier": "Gold",
+      "booking_reference": "SK4821X",
+      "contact": {
+        "email": "priya.nair@example.com",
+        "phone": "+91-98xxxxxxx1"
+      },
+      "travel_history_last_12_months": {
+        "flights": 6,
+        "prior_complaints": [
+          {"issue": "delayed baggage", "resolution": "resolved with voucher"}
+        ]
+      }
+    },
+    "arvind.kulkarni": {
+      "name": "Arvind Kulkarni",
+      "loyalty_tier": "Silver",
+      "booking_reference": "TR1190B",
+      "contact": {
+        "email": "arvind.kulkarni@example.com",
+        "phone": "+91-98xxxxxxx2"
+      },
+      "travel_history_last_12_months": {
+        "flights": 3,
+        "prior_complaints": []
+      }
+    },
+    "meher.kaur": {
+      "name": "Meher Kaur",
+      "loyalty_tier": "Platinum",
+      "booking_reference": "WL7742",
+      "contact": {
+        "email": "meher.kaur@example.com",
+        "phone": "+91-98xxxxxxx3"
+      },
+      "travel_history_last_12_months": {
+        "flights": 10,
+        "prior_complaints": [
+          {"issue": "overbooking", "resolution": "resolved with a tier-status upgrade"}
+        ]
+      }
+    }
+  },
+  "bookings": [
+    {
+      "customer": "Priya Nair",
+      "pnr": "SK4821X",
+      "flight": "SK-204",
+      "route": "Delhi -> Goa",
+      "date": "2026-09-23",
+      "scheduled_departure": "18:40",
+      "status": "Cancelled (operational reasons)"
+    },
+    {
+      "customer": "Priya Nair",
+      "pnr": "SK4821X",
+      "flight": "Return",
+      "route": "Goa -> Delhi",
+      "date": "2026-09-25",
+      "scheduled_departure": "16:20",
+      "status": "Unaffected"
+    },
+    {
+      "customer": "Arvind Kulkarni",
+      "pnr": "TR1190B",
+      "flight": "SK-118",
+      "route": "Mumbai -> Bengaluru",
+      "date": "2026-09-23",
+      "scheduled_departure": "07:10",
+      "status": "Delayed 4h (new departure 11:10)"
+    },
+    {
+      "customer": "Meher Kaur",
+      "pnr": "WL7742",
+      "flight": "SK-305",
+      "route": "Delhi -> Hyderabad",
+      "date": "2026-09-23",
+      "scheduled_departure": "14:00",
+      "status": "Delayed 6h (new departure 20:00)"
+    }
+  ],
+  "service_rules": {
+    "cancellation_rebooking_rule": "If a flight is cancelled by the airline, the customer is entitled to a free rebooking on the next available flight within 24 hours, or a full refund, customer's choice.",
+    "delay_compensation_rule": {
+      "under_3_hours": "meal voucher (Rs. 500)",
+      "more_than_3_hours": "meal voucher + lounge access",
+      "more_than_5_hours": "meal voucher + hotel accommodation, covering only the delayed hours (not a full night's stay)"
+    },
+    "refund_processing_rule": "Refunds for airline-caused cancellations are processed in full within 7 business days. Refunds are issued to the original payment method only.",
+    "fare_difference_rule": "If a customer voluntarily chooses to rebook on a higher-fare flight (not airline-caused), they must pay the fare difference. Agents cannot waive fare differences above Rs. 1500 without supervisor approval.",
+    "loyalty_tier_rule": "Gold and Platinum tier customers get priority rebooking (first access to next-available seats) but no additional compensation beyond the standard policy."
+  },
+  "allowed_actions": [
+    "Rebook the customer on the next available flight within 24 hours at no charge (airline-caused disruption)",
+    "Issue meal vouchers and lounge access per the delay compensation rule, where the delay qualifies",
+    "Arrange hotel accommodation for the delayed-hours compensation rule, where the delay qualifies",
+    "Initiate a refund request for airline-caused cancellations",
+    "Provide the customer's own booking and flight status information"
+  ],
+  "prohibited_actions": [
+    "Approving any compensation beyond the stated policy amounts",
+    "Waiving a fare difference above Rs. 1500",
+    "Making exceptions for non-airline-caused disruptions (e.g., customer missed the flight)",
+    "Handling threats of legal action or formal complaints - must be escalated immediately",
+    "Processing refunds to a different payment method than the original"
+  ]
+}
+
+===== agent.py =====
+
+"""
+Airline Disruption Resolution Agent - core logic.
+
+This module is intentionally rule-based (no external LLM calls) so that every
+decision is deterministic, explainable, and traceable back to a specific rule
+in the data pack. All facts (customers, bookings, policies) are read from
+data.json only - nothing here is invented.
+"""
+
+import json
+import os
+import re
+
+DATA_PATH = os.path.join(os.path.dirname(__file__), "data.json")
+
+with open(DATA_PATH, "r") as f:
+    DATA = json.load(f)
+
+
+def find_customer_by_pnr(pnr):
+    """Look up a customer profile by their booking reference (PNR)."""
+    if not pnr:
+        return None
+    pnr = pnr.strip().upper()
+    for cust in DATA["customers"].values():
+        if cust["booking_reference"].upper() == pnr:
+            return cust
+    return None
+
+
+def find_bookings_by_pnr(pnr):
+    """Return all flight bookings associated with a given PNR."""
+    if not pnr:
+        return []
+    pnr = pnr.strip().upper()
+    return [b for b in DATA["bookings"] if b["pnr"].upper() == pnr]
+
+
+def compute_delay_compensation(delay_hours):
+    """Map a delay duration to the compensation tier defined in service_rules."""
+    rules = DATA["service_rules"]["delay_compensation_rule"]
+    if delay_hours < 3:
+        return rules["under_3_hours"]
+    elif delay_hours <= 5:
+        return rules["more_than_3_hours"]
+    else:
+        return rules["more_than_5_hours"]
+
+
+def is_priority_tier(customer):
+    """Gold and Platinum tiers get priority rebooking per loyalty_tier_rule."""
+    return customer and customer.get("loyalty_tier") in ("Gold", "Platinum")
+
+
+def detect_intents(message):
+    """
+    Very lightweight keyword-based intent detection.
+
+    Returns a list of intents found in the message. Order doesn't imply
+    priority - build_response() decides which intents take precedence
+    (e.g. legal threats and prohibited-action requests are checked first
+    and short-circuit everything else).
+    """
+    msg = message.lower()
+    intents = []
+
+    if any(k in msg for k in ["legal action", "lawyer", "sue", "complaint", "formal complaint"]):
+        intents.append("escalate_legal")
+
+    non_airline_caused_signals = [
+        "i missed my flight", "i missed the flight", "missed my flight", "overslept",
+        "was late", "i was late", "stuck in traffic", "my fault",
+        "got to the airport late", "reached late", "came late"
+    ]
+    if any(k in msg for k in non_airline_caused_signals):
+        intents.append("non_airline_caused_request")
+
+    different_payment_signals = [
+        "different card", "another card", "different account", "another account",
+        "different payment method", "different bank account", "other card",
+        "paypal", "send it to my", "credit it to my other",
+        "my friend's account", "someone else's account"
+    ]
+    if "refund" in msg and any(k in msg for k in different_payment_signals):
+        intents.append("refund_different_method")
+
+    if any(k in msg for k in ["cancel", "cancelled", "cancellation"]):
+        intents.append("cancellation")
+    if any(k in msg for k in ["delay", "delayed", "late"]):
+        intents.append("delay")
+    if any(k in msg for k in ["refund", "cash back", "money back"]):
+        intents.append("refund")
+
+    free_upgrade_signals = [
+        "for the trouble", "free upgrade", "complimentary", "as compensation",
+        "for my trouble", "no charge", "waive", "for free"
+    ]
+    upgrade_signals = ["upgrade", "business class", "higher fare", "higher-fare", "different flight"]
+
+    if any(k in msg for k in upgrade_signals):
+        if any(k in msg for k in free_upgrade_signals):
+            intents.append("goodwill_compensation_request")
+        else:
+            intents.append("fare_upgrade")
+
+    if any(k in msg for k in ["hotel", "accommodation", "full night", "overnight stay"]):
+        intents.append("hotel")
+    if any(k in msg for k in ["status", "where is my flight", "flight status"]):
+        intents.append("status")
+
+    return intents if intents else ["unknown"]
+
+
+def is_angry(message):
+    """Detect frustrated tone so the reply can open with an empathy line."""
+    angry_keywords = ["furious", "angry", "unacceptable", "ridiculous", "worst",
+                       "frustrated", "disgusted", "disappointed", "no one told me"]
+    return any(k in message.lower() for k in angry_keywords)
+
+
+def build_response(pnr, message, already_escalated=False):
+    """
+    Main entry point: given a PNR and a customer message, decide what the
+    agent should say and do.
+
+    already_escalated: if True, this conversation was already escalated to a
+    human in a previous turn. The agent should not keep taking new actions -
+    it stays in a "handed off" state until the conversation is cleared.
+    """
+    log = []
+    customer = find_customer_by_pnr(pnr)
+
+    if not customer:
+        return {
+            "reply": "I couldn't find a booking with that reference. Could you double-check your PNR?",
+            "action": "none",
+            "escalated": False,
+            "log": ["No customer found for PNR: " + str(pnr)]
+        }
+
+    if not message or not message.strip():
+        return {
+            "reply": "Sorry, I didn't catch that - could you tell me what you need help with?",
+            "action": "none",
+            "escalated": False,
+            "log": ["Empty message received"]
+        }
+
+    # If this conversation is already with a human agent, don't process
+    # further automated actions - just acknowledge and keep it escalated.
+    if already_escalated:
+        return {
+            "reply": "This conversation has already been escalated to our specialist team, "
+                      "and they'll be in touch shortly. I don't want to take any further "
+                      "automated action on it in the meantime.",
+            "action": "already_escalated",
+            "escalated": True,
+            "log": ["Conversation already escalated - no further automated action taken"]
+        }
+
+    bookings = find_bookings_by_pnr(pnr)
+    relevant_booking = bookings[0] if bookings else None
+    intents = detect_intents(message)
+    angry = is_angry(message)
+    priority = is_priority_tier(customer)
+    log.append(f"Detected intents: {intents}")
+    log.append(f"Angry/frustrated tone detected: {angry}")
+    log.append(f"Priority tier ({customer['loyalty_tier']}): {priority}")
+
+    empathy_prefix = ""
+    if angry:
+        empathy_prefix = "I completely understand your frustration, and I'm sorry for the inconvenience. "
+
+    # --- Prohibited actions: these always take priority and short-circuit everything else ---
+
+    if "escalate_legal" in intents:
+        return {
+            "reply": empathy_prefix + "I want to make sure this gets the right attention immediately. "
+                      "I'm escalating this to our specialist support team, and they will reach out to you directly.",
+            "action": "escalate_to_human",
+            "escalated": True,
+            "log": log + ["Escalated: legal/formal complaint threat detected"]
+        }
+
+    if "non_airline_caused_request" in intents:
+        return {
+            "reply": empathy_prefix + "I'm sorry to hear that. Since this wasn't caused by the airline "
+                      "(the flight itself operated as scheduled), I'm not able to offer a free rebooking, "
+                      "refund, or waiver on my own for this. I'm escalating this to a supervisor who can "
+                      "review the specifics of your situation.",
+            "action": "escalate_non_airline_caused",
+            "escalated": True,
+            "log": log + ["Escalated: customer-caused disruption, not covered by standard policy"]
+        }
+
+    if "refund_different_method" in intents:
+        return {
+            "reply": empathy_prefix + "I'm not able to process a refund to a different payment method - "
+                      "our policy requires refunds to go back to the original payment method only. "
+                      "I'm escalating this to a supervisor to review your request.",
+            "action": "escalate_refund_different_method",
+            "escalated": True,
+            "log": log + ["Escalated: refund requested to a different payment method"]
+        }
+
+    # --- Allowed actions: handled automatically ---
+
+    reply_parts = []
+    actions_taken = []
+    needs_escalation = False
+
+    if "cancellation" in intents and relevant_booking and "cancelled" in relevant_booking["status"].lower():
+        rebooking_line = (
+            "Your flight " + relevant_booking["flight"] + " (" + relevant_booking["route"] +
+            ") was cancelled due to operational reasons. As per policy, you're entitled to a free "
+            "rebooking on the next available flight within 24 hours, or a full refund - whichever you prefer."
+        )
+        if priority:
+            rebooking_line += (
+                f" As a {customer['loyalty_tier']} tier member, you also get priority access "
+                "to the next available seats."
+            )
+        reply_parts.append(rebooking_line)
+        actions_taken.append("offer_rebooking_or_refund")
+        log.append("Applied cancellation_rebooking_rule" + (" + loyalty_tier_rule (priority)" if priority else ""))
+
+    delay_hours = 0
+    if relevant_booking and "delayed" in relevant_booking["status"].lower():
+        status_text = relevant_booking["status"]
+        digits = "".join(filter(str.isdigit, status_text.split("Delayed")[1].split("h")[0]))
+        delay_hours = int(digits) if digits else 0
+
+    if ("delay" in intents or "hotel" in intents) and relevant_booking and delay_hours > 0:
+        comp = compute_delay_compensation(delay_hours)
+        delay_line = (
+            f"Your flight {relevant_booking['flight']} is delayed by {delay_hours} hours. "
+            f"Under our delay compensation policy, you're entitled to: {comp}."
+        )
+        if priority:
+            delay_line += (
+                f" As a {customer['loyalty_tier']} tier member, you also get priority rebooking "
+                "if you'd prefer to move to another flight."
+            )
+        reply_parts.append(delay_line)
+        actions_taken.append("issue_delay_compensation")
+        log.append(f"Delay hours: {delay_hours}, Compensation: {comp}" + (" + loyalty_tier_rule (priority)" if priority else ""))
+
+        if "hotel" in intents and delay_hours <= 5:
+            reply_parts.append(
+                "A full night's hotel stay isn't something I can offer here - our policy only covers "
+                "accommodation for the delayed hours themselves when the delay is over 5 hours."
+            )
+            log.append("Denied full-night stay (delay <= 5 hours)")
+
+    if "goodwill_compensation_request" in intents:
+        reply_parts.append(
+            "I understand you'd like additional compensation, but I'm not authorized to approve "
+            "anything beyond our standard policy on my own. I'm escalating this specific request to "
+            "a supervisor for review."
+        )
+        actions_taken.append("escalate_goodwill_compensation")
+        needs_escalation = True
+        log.append("Escalated: customer requested free/goodwill compensation beyond policy (e.g. free upgrade)")
+
+    if "fare_upgrade" in intents:
+        numbers = re.findall(r'\d{1,3}(?:,\d{3})+|\d+', message)
+        fare_diff = int(numbers[-1].replace(",", "")) if numbers else None
+
+        if fare_diff is not None and fare_diff > 1500:
+            reply_parts.append(
+                f"I can see you'd like to move to a higher-fare flight, but the fare difference of "
+                f"Rs. {fare_diff} is above what I'm authorized to approve on my own (limit is Rs. 1,500). "
+                f"I'm escalating this specific request to a supervisor for approval."
+            )
+            actions_taken.append("escalate_fare_difference")
+            needs_escalation = True
+            log.append(f"Fare difference Rs.{fare_diff} exceeds Rs.1500 limit - escalating")
+        else:
+            reply_parts.append(
+                "I can help you move to a different flight. Since this isn't airline-caused, any fare "
+                "difference (up to Rs. 1,500) would need to be paid by you before I can confirm it."
+            )
+            actions_taken.append("check_fare_difference")
+            log.append("Applied fare_difference_rule, within authorization limit")
+
+    if "refund" in intents:
+        reply_parts.append(
+            "I've started a refund request for you. Refunds for airline-caused cancellations are "
+            "processed in full within 7 business days, and will go back to your original payment method."
+        )
+        actions_taken.append("initiate_refund")
+        log.append("Applied refund_processing_rule")
+
+    if "status" in intents and relevant_booking:
+        reply_parts.append(
+            f"Your flight {relevant_booking['flight']} ({relevant_booking['route']}) "
+            f"status: {relevant_booking['status']}."
+        )
+        actions_taken.append("provide_status")
+        log.append("Provided booking status")
+
+    if not reply_parts:
+        return {
+            "reply": empathy_prefix + "Could you tell me a bit more about what you need help with - "
+                      "for example, your flight status, a delay, or a cancellation?",
+            "action": "clarify",
+            "escalated": False,
+            "log": log + ["No confident intent match, asked for clarification"]
+        }
+
+    final_reply = empathy_prefix + " ".join(reply_parts)
+    if needs_escalation:
+        final_reply += " A specialist will follow up with you directly on that part."
+
+    return {
+        "reply": final_reply,
+        "action": " + ".join(actions_taken),
+        "escalated": needs_escalation,
+        "log": log
+    }
+
+===== app.py =====
+
+import streamlit as st
+from agent import build_response, find_customer_by_pnr
+
+st.set_page_config(page_title="Airline Support Agent", page_icon="âœˆï¸")
+
+# --- Theme toggle ---
+if "theme" not in st.session_state:
+    st.session_state["theme"] = "Dark"
+
+theme_choice = st.sidebar.radio("Theme", ["Dark", "Light"], horizontal=True,
+                                  index=0 if st.session_state["theme"] == "Dark" else 1)
+st.session_state["theme"] = theme_choice
+
+if theme_choice == "Light":
+    st.markdown("""
+        <style>
+        .stApp {
+            background-color: #ffffff;
+            color: #1a1a1a;
+        }
+        .stApp, .stApp p, .stApp span, .stApp label, .stApp h1, .stApp h2, .stApp h3, .stApp div {
+            color: #1a1a1a;
+        }
+
+        [data-testid="stSidebar"] {
+            background-color: #f5f5f5;
+        }
+        [data-testid="stSidebar"] * {
+            color: #1a1a1a !important;
+        }
+
+        /* Force every input/textarea across the whole app, no matter how it's nested */
+        input, textarea {
+            color: #1a1a1a !important;
+            -webkit-text-fill-color: #1a1a1a !important;
+            caret-color: #1a1a1a !important;
+            background-color: #ffffff !important;
+        }
+        input::placeholder, textarea::placeholder {
+            color: #666666 !important;
+            -webkit-text-fill-color: #666666 !important;
+        }
+
+        /* Selectbox search input specifically (BaseWeb uses this role/attribute) */
+        [role="combobox"] input,
+        input[aria-autocomplete="list"] {
+            color: #1a1a1a !important;
+            -webkit-text-fill-color: #1a1a1a !important;
+        }
+
+        [data-baseweb="select"] > div {
+            background-color: #ffffff !important;
+            border: 1px solid #cccccc !important;
+        }
+        [data-baseweb="select"] span {
+            color: #1a1a1a !important;
+        }
+
+        [data-baseweb="popover"], [data-baseweb="menu"] {
+            background-color: #ffffff !important;
+        }
+        [data-baseweb="menu"] li, [data-baseweb="menu"] li * {
+            color: #1a1a1a !important;
+            background-color: #ffffff !important;
+        }
+        [data-baseweb="menu"] li:hover {
+            background-color: #e6e6e6 !important;
+        }
+
+        [data-testid="stSidebar"] button {
+            background-color: #ffffff !important;
+            color: #1a1a1a !important;
+            border: 1px solid #cccccc !important;
+        }
+        [data-testid="stSidebar"] button:hover {
+            background-color: #eeeeee !important;
+        }
+        [data-testid="stSidebar"] button p {
+            color: #1a1a1a !important;
+        }
+
+        [data-testid="stChatMessage"] {
+            background-color: #f0f2f6;
+            border-radius: 10px;
+        }
+        [data-testid="stAlertContainer"] {
+            color: #1a1a1a !important;
+        }
+        [data-testid="stSidebar"] [data-testid="stRadio"] label {
+            color: #1a1a1a !important;
+        }
+        [data-testid="stExpander"] summary {
+            color: #1a1a1a !important;
+            background-color: #ffffff !important;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+
+st.title("âœˆï¸ Airline Disruption Support Agent")
+st.caption("Customer-facing resolution agent â€” Assignment 3 prototype")
+
+# --- Sidebar: pick a customer / enter PNR ---
+st.sidebar.header("Customer Lookup")
+
+if "pnr_input" not in st.session_state:
+    st.session_state["pnr_input"] = "SK4821X"
+
+sample_pnrs = {
+    "Priya Nair (Gold) - SK4821X": "SK4821X",
+    "Arvind Kulkarni (Silver) - TR1190B": "TR1190B",
+    "Meher Kaur (Platinum) - WL7742": "WL7742",
+}
+choice = st.sidebar.selectbox("Or pick a sample customer", list(sample_pnrs.keys()))
+if st.sidebar.button("Use selected customer"):
+    st.session_state["pnr_input"] = sample_pnrs[choice]
+    st.session_state["messages"] = []
+    st.session_state["audit_log"] = []
+    st.session_state["conversation_escalated"] = False
+    st.rerun()
+
+pnr = st.sidebar.text_input("Enter Booking Reference (PNR)", key="pnr_input")
+
+customer = find_customer_by_pnr(pnr)
+if customer:
+    st.sidebar.success(f"Found: {customer['name']} ({customer['loyalty_tier']} tier)")
+    st.sidebar.caption(
+        f"Flights (12 mo): {customer['travel_history_last_12_months']['flights']} | "
+        f"Prior complaints: {len(customer['travel_history_last_12_months']['prior_complaints'])}"
+    )
+else:
+    st.sidebar.error("No customer found for this PNR")
+
+# --- Session state ---
+if "messages" not in st.session_state:
+    st.session_state["messages"] = []
+
+if "audit_log" not in st.session_state:
+    st.session_state["audit_log"] = []
+
+if "conversation_escalated" not in st.session_state:
+    st.session_state["conversation_escalated"] = False
+
+# --- Customer context banner ---
+if customer:
+    st.info(
+        f"**{customer['name']}** Â· {customer['loyalty_tier']} tier Â· PNR `{customer['booking_reference']}`"
+    )
+    if st.session_state["conversation_escalated"]:
+        st.warning("ðŸš¨ This conversation has been escalated to a human agent.")
+
+# --- Chat history ---
+for msg in st.session_state["messages"]:
+    with st.chat_message(msg["role"]):
+        st.write(msg["content"])
+
+# --- Chat input ---
+user_input = st.chat_input("Type the customer's message here...")
+
+if user_input:
+    st.session_state["messages"].append({"role": "user", "content": user_input})
+    with st.chat_message("user"):
+        st.write(user_input)
+
+    result = build_response(pnr, user_input, already_escalated=st.session_state["conversation_escalated"])
+
+    st.session_state["messages"].append({"role": "assistant", "content": result["reply"]})
+    with st.chat_message("assistant"):
+        st.write(result["reply"])
+
+    if result["escalated"]:
+        st.session_state["conversation_escalated"] = True
+        st.warning("ðŸš¨ This conversation has been escalated to a human agent.")
+
+    st.session_state["audit_log"].append({
+        "pnr": pnr,
+        "message": user_input,
+        "action": result["action"],
+        "escalated": result["escalated"],
+        "log": result["log"],
+    })
+
+# --- Audit trail ---
+with st.sidebar.expander("ðŸ“‹ Audit Trail / Action Record"):
+    if st.session_state["audit_log"]:
+        for i, entry in enumerate(st.session_state["audit_log"], 1):
+            st.markdown(f"**Turn {i}** â€” PNR: `{entry['pnr']}`")
+            st.write(f"Action taken: `{entry['action']}`")
+            st.write(f"Escalated: {entry['escalated']}")
+            for line in entry["log"]:
+                st.caption("â€¢ " + line)
+            st.divider()
+    else:
+        st.caption("No actions yet.")
+
+if st.sidebar.button("Clear conversation"):
+    st.session_state["messages"] = []
+    st.session_state["audit_log"] = []
+    st.session_state["conversation_escalated"] = False
+    st.rerun()
+
+===== requirements.txt =====
+
+streamlit>=1.30.0
