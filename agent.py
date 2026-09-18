@@ -1,6 +1,14 @@
+"""
+Airline Disruption Resolution Agent - core logic.
+
+This module is intentionally rule-based (no external LLM calls) so that every
+decision is deterministic, explainable, and traceable back to a specific rule
+in the data pack. All facts (customers, bookings, policies) are read from
+data.json only - nothing here is invented.
+"""
+
 import json
 import os
-from datetime import datetime
 import re
 
 DATA_PATH = os.path.join(os.path.dirname(__file__), "data.json")
@@ -10,49 +18,68 @@ with open(DATA_PATH, "r") as f:
 
 
 def find_customer_by_pnr(pnr):
+    """Look up a customer profile by their booking reference (PNR)."""
+    if not pnr:
+        return None
     pnr = pnr.strip().upper()
-    for key, cust in DATA["customers"].items():
+    for cust in DATA["customers"].values():
         if cust["booking_reference"].upper() == pnr:
             return cust
     return None
 
 
 def find_bookings_by_pnr(pnr):
+    """Return all flight bookings associated with a given PNR."""
+    if not pnr:
+        return []
     pnr = pnr.strip().upper()
     return [b for b in DATA["bookings"] if b["pnr"].upper() == pnr]
 
 
 def compute_delay_compensation(delay_hours):
+    """Map a delay duration to the compensation tier defined in service_rules."""
+    rules = DATA["service_rules"]["delay_compensation_rule"]
     if delay_hours < 3:
-        return DATA["service_rules"]["delay_compensation_rule"]["under_3_hours"]
+        return rules["under_3_hours"]
     elif delay_hours <= 5:
-        return DATA["service_rules"]["delay_compensation_rule"]["more_than_3_hours"]
+        return rules["more_than_3_hours"]
     else:
-        return DATA["service_rules"]["delay_compensation_rule"]["more_than_5_hours"]
+        return rules["more_than_5_hours"]
+
+
+def is_priority_tier(customer):
+    """Gold and Platinum tiers get priority rebooking per loyalty_tier_rule."""
+    return customer and customer.get("loyalty_tier") in ("Gold", "Platinum")
 
 
 def detect_intents(message):
+    """
+    Very lightweight keyword-based intent detection.
+
+    Returns a list of intents found in the message. Order doesn't imply
+    priority - build_response() decides which intents take precedence
+    (e.g. legal threats and prohibited-action requests are checked first
+    and short-circuit everything else).
+    """
     msg = message.lower()
     intents = []
 
     if any(k in msg for k in ["legal action", "lawyer", "sue", "complaint", "formal complaint"]):
         intents.append("escalate_legal")
 
-    # --- NEW: detect customer-caused (non-airline) disruption requests ---
     non_airline_caused_signals = [
         "i missed my flight", "i missed the flight", "missed my flight", "overslept",
-        "was late", "i was late", "stuck in traffic", "my fault", "got to the airport late",
-        "reached late", "came late"
+        "was late", "i was late", "stuck in traffic", "my fault",
+        "got to the airport late", "reached late", "came late"
     ]
     if any(k in msg for k in non_airline_caused_signals):
         intents.append("non_airline_caused_request")
 
-    # --- NEW: detect requests to send refund to a different payment method ---
     different_payment_signals = [
         "different card", "another card", "different account", "another account",
         "different payment method", "different bank account", "other card",
-        "paypal", "send it to my", "credit it to my other", "my friend's account",
-        "someone else's account"
+        "paypal", "send it to my", "credit it to my other",
+        "my friend's account", "someone else's account"
     ]
     if "refund" in msg and any(k in msg for k in different_payment_signals):
         intents.append("refund_different_method")
@@ -64,8 +91,10 @@ def detect_intents(message):
     if any(k in msg for k in ["refund", "cash back", "money back"]):
         intents.append("refund")
 
-    free_upgrade_signals = ["for the trouble", "free upgrade", "complimentary", "as compensation",
-                             "for my trouble", "no charge", "waive", "for free"]
+    free_upgrade_signals = [
+        "for the trouble", "free upgrade", "complimentary", "as compensation",
+        "for my trouble", "no charge", "waive", "for free"
+    ]
     upgrade_signals = ["upgrade", "business class", "higher fare", "higher-fare", "different flight"]
 
     if any(k in msg for k in upgrade_signals):
@@ -83,33 +112,66 @@ def detect_intents(message):
 
 
 def is_angry(message):
+    """Detect frustrated tone so the reply can open with an empathy line."""
     angry_keywords = ["furious", "angry", "unacceptable", "ridiculous", "worst",
                        "frustrated", "disgusted", "disappointed", "no one told me"]
     return any(k in message.lower() for k in angry_keywords)
 
 
-def build_response(pnr, message):
+def build_response(pnr, message, already_escalated=False):
+    """
+    Main entry point: given a PNR and a customer message, decide what the
+    agent should say and do.
+
+    already_escalated: if True, this conversation was already escalated to a
+    human in a previous turn. The agent should not keep taking new actions -
+    it stays in a "handed off" state until the conversation is cleared.
+    """
     log = []
     customer = find_customer_by_pnr(pnr)
 
     if not customer:
         return {
-            "reply": "I couldn't find a booking with that reference. Could you double check your PNR?",
+            "reply": "I couldn't find a booking with that reference. Could you double-check your PNR?",
             "action": "none",
             "escalated": False,
-            "log": ["No customer found for PNR: " + pnr]
+            "log": ["No customer found for PNR: " + str(pnr)]
+        }
+
+    if not message or not message.strip():
+        return {
+            "reply": "Sorry, I didn't catch that - could you tell me what you need help with?",
+            "action": "none",
+            "escalated": False,
+            "log": ["Empty message received"]
+        }
+
+    # If this conversation is already with a human agent, don't process
+    # further automated actions - just acknowledge and keep it escalated.
+    if already_escalated:
+        return {
+            "reply": "This conversation has already been escalated to our specialist team, "
+                      "and they'll be in touch shortly. I don't want to take any further "
+                      "automated action on it in the meantime.",
+            "action": "already_escalated",
+            "escalated": True,
+            "log": ["Conversation already escalated - no further automated action taken"]
         }
 
     bookings = find_bookings_by_pnr(pnr)
     relevant_booking = bookings[0] if bookings else None
     intents = detect_intents(message)
     angry = is_angry(message)
+    priority = is_priority_tier(customer)
     log.append(f"Detected intents: {intents}")
     log.append(f"Angry/frustrated tone detected: {angry}")
+    log.append(f"Priority tier ({customer['loyalty_tier']}): {priority}")
 
     empathy_prefix = ""
     if angry:
         empathy_prefix = "I completely understand your frustration, and I'm sorry for the inconvenience. "
+
+    # --- Prohibited actions: these always take priority and short-circuit everything else ---
 
     if "escalate_legal" in intents:
         return {
@@ -120,7 +182,6 @@ def build_response(pnr, message):
             "log": log + ["Escalated: legal/formal complaint threat detected"]
         }
 
-    # --- NEW: non-airline-caused disruption must escalate, not be auto-resolved ---
     if "non_airline_caused_request" in intents:
         return {
             "reply": empathy_prefix + "I'm sorry to hear that. Since this wasn't caused by the airline "
@@ -132,7 +193,6 @@ def build_response(pnr, message):
             "log": log + ["Escalated: customer-caused disruption, not covered by standard policy"]
         }
 
-    # --- NEW: refund to a different payment method must escalate ---
     if "refund_different_method" in intents:
         return {
             "reply": empathy_prefix + "I'm not able to process a refund to a different payment method - "
@@ -143,39 +203,54 @@ def build_response(pnr, message):
             "log": log + ["Escalated: refund requested to a different payment method"]
         }
 
+    # --- Allowed actions: handled automatically ---
+
     reply_parts = []
     actions_taken = []
     needs_escalation = False
 
     if "cancellation" in intents and relevant_booking and "cancelled" in relevant_booking["status"].lower():
-        reply_parts.append(
+        rebooking_line = (
             "Your flight " + relevant_booking["flight"] + " (" + relevant_booking["route"] +
             ") was cancelled due to operational reasons. As per policy, you're entitled to a free "
             "rebooking on the next available flight within 24 hours, or a full refund - whichever you prefer."
         )
+        if priority:
+            rebooking_line += (
+                f" As a {customer['loyalty_tier']} tier member, you also get priority access "
+                "to the next available seats."
+            )
+        reply_parts.append(rebooking_line)
         actions_taken.append("offer_rebooking_or_refund")
-        log.append("Applied cancellation_rebooking_rule")
+        log.append("Applied cancellation_rebooking_rule" + (" + loyalty_tier_rule (priority)" if priority else ""))
 
     delay_hours = 0
     if relevant_booking and "delayed" in relevant_booking["status"].lower():
         status_text = relevant_booking["status"]
-        delay_hours = int("".join(filter(str.isdigit, status_text.split("Delayed")[1].split("h")[0])))
+        digits = "".join(filter(str.isdigit, status_text.split("Delayed")[1].split("h")[0]))
+        delay_hours = int(digits) if digits else 0
 
     if ("delay" in intents or "hotel" in intents) and relevant_booking and delay_hours > 0:
         comp = compute_delay_compensation(delay_hours)
-        reply_parts.append(
+        delay_line = (
             f"Your flight {relevant_booking['flight']} is delayed by {delay_hours} hours. "
             f"Under our delay compensation policy, you're entitled to: {comp}."
         )
+        if priority:
+            delay_line += (
+                f" As a {customer['loyalty_tier']} tier member, you also get priority rebooking "
+                "if you'd prefer to move to another flight."
+            )
+        reply_parts.append(delay_line)
         actions_taken.append("issue_delay_compensation")
-        log.append(f"Delay hours: {delay_hours}, Compensation: {comp}")
+        log.append(f"Delay hours: {delay_hours}, Compensation: {comp}" + (" + loyalty_tier_rule (priority)" if priority else ""))
 
         if "hotel" in intents and delay_hours <= 5:
             reply_parts.append(
                 "A full night's hotel stay isn't something I can offer here - our policy only covers "
                 "accommodation for the delayed hours themselves when the delay is over 5 hours."
             )
-            log.append("Denied full-night stay")
+            log.append("Denied full-night stay (delay <= 5 hours)")
 
     if "goodwill_compensation_request" in intents:
         reply_parts.append(

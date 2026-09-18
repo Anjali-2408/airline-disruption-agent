@@ -20,22 +20,43 @@ sample_pnrs = {
 choice = st.sidebar.selectbox("Or pick a sample customer", list(sample_pnrs.keys()))
 if st.sidebar.button("Use selected customer"):
     st.session_state["pnr_input"] = sample_pnrs[choice]
+    # switching customer starts a fresh conversation
+    st.session_state["messages"] = []
+    st.session_state["audit_log"] = []
+    st.session_state["conversation_escalated"] = False
+    st.rerun()
 
 pnr = st.sidebar.text_input("Enter Booking Reference (PNR)", key="pnr_input")
 
 customer = find_customer_by_pnr(pnr)
 if customer:
     st.sidebar.success(f"Found: {customer['name']} ({customer['loyalty_tier']} tier)")
+    st.sidebar.caption(
+        f"Flights (12 mo): {customer['travel_history_last_12_months']['flights']} | "
+        f"Prior complaints: {len(customer['travel_history_last_12_months']['prior_complaints'])}"
+    )
 else:
     st.sidebar.error("No customer found for this PNR")
 
-# --- Chat history ---
+# --- Session state ---
 if "messages" not in st.session_state:
     st.session_state["messages"] = []
 
 if "audit_log" not in st.session_state:
     st.session_state["audit_log"] = []
 
+if "conversation_escalated" not in st.session_state:
+    st.session_state["conversation_escalated"] = False
+
+# --- Customer context banner ---
+if customer:
+    st.info(
+        f"**{customer['name']}** · {customer['loyalty_tier']} tier · PNR `{customer['booking_reference']}`"
+    )
+    if st.session_state["conversation_escalated"]:
+        st.warning("🚨 This conversation has been escalated to a human agent.")
+
+# --- Chat history ---
 for msg in st.session_state["messages"]:
     with st.chat_message(msg["role"]):
         st.write(msg["content"])
@@ -48,13 +69,15 @@ if user_input:
     with st.chat_message("user"):
         st.write(user_input)
 
-    result = build_response(pnr, user_input)
+    result = build_response(pnr, user_input, already_escalated=st.session_state["conversation_escalated"])
 
     st.session_state["messages"].append({"role": "assistant", "content": result["reply"]})
     with st.chat_message("assistant"):
         st.write(result["reply"])
-        if result["escalated"]:
-            st.warning("🚨 This conversation has been escalated to a human agent.")
+
+    if result["escalated"]:
+        st.session_state["conversation_escalated"] = True
+        st.warning("🚨 This conversation has been escalated to a human agent.")
 
     st.session_state["audit_log"].append({
         "pnr": pnr,
@@ -80,4 +103,5 @@ with st.sidebar.expander("📋 Audit Trail / Action Record"):
 if st.sidebar.button("Clear conversation"):
     st.session_state["messages"] = []
     st.session_state["audit_log"] = []
+    st.session_state["conversation_escalated"] = False
     st.rerun()
