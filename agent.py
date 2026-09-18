@@ -37,6 +37,26 @@ def detect_intents(message):
 
     if any(k in msg for k in ["legal action", "lawyer", "sue", "complaint", "formal complaint"]):
         intents.append("escalate_legal")
+
+    # --- NEW: detect customer-caused (non-airline) disruption requests ---
+    non_airline_caused_signals = [
+        "i missed my flight", "i missed the flight", "missed my flight", "overslept",
+        "was late", "i was late", "stuck in traffic", "my fault", "got to the airport late",
+        "reached late", "came late"
+    ]
+    if any(k in msg for k in non_airline_caused_signals):
+        intents.append("non_airline_caused_request")
+
+    # --- NEW: detect requests to send refund to a different payment method ---
+    different_payment_signals = [
+        "different card", "another card", "different account", "another account",
+        "different payment method", "different bank account", "other card",
+        "paypal", "send it to my", "credit it to my other", "my friend's account",
+        "someone else's account"
+    ]
+    if "refund" in msg and any(k in msg for k in different_payment_signals):
+        intents.append("refund_different_method")
+
     if any(k in msg for k in ["cancel", "cancelled", "cancellation"]):
         intents.append("cancellation")
     if any(k in msg for k in ["delay", "delayed", "late"]):
@@ -44,7 +64,6 @@ def detect_intents(message):
     if any(k in msg for k in ["refund", "cash back", "money back"]):
         intents.append("refund")
 
-    # --- FIX 1: separate "free/goodwill upgrade" from "paid voluntary upgrade" ---
     free_upgrade_signals = ["for the trouble", "free upgrade", "complimentary", "as compensation",
                              "for my trouble", "no charge", "waive", "for free"]
     upgrade_signals = ["upgrade", "business class", "higher fare", "higher-fare", "different flight"]
@@ -101,6 +120,29 @@ def build_response(pnr, message):
             "log": log + ["Escalated: legal/formal complaint threat detected"]
         }
 
+    # --- NEW: non-airline-caused disruption must escalate, not be auto-resolved ---
+    if "non_airline_caused_request" in intents:
+        return {
+            "reply": empathy_prefix + "I'm sorry to hear that. Since this wasn't caused by the airline "
+                      "(the flight itself operated as scheduled), I'm not able to offer a free rebooking, "
+                      "refund, or waiver on my own for this. I'm escalating this to a supervisor who can "
+                      "review the specifics of your situation.",
+            "action": "escalate_non_airline_caused",
+            "escalated": True,
+            "log": log + ["Escalated: customer-caused disruption, not covered by standard policy"]
+        }
+
+    # --- NEW: refund to a different payment method must escalate ---
+    if "refund_different_method" in intents:
+        return {
+            "reply": empathy_prefix + "I'm not able to process a refund to a different payment method - "
+                      "our policy requires refunds to go back to the original payment method only. "
+                      "I'm escalating this to a supervisor to review your request.",
+            "action": "escalate_refund_different_method",
+            "escalated": True,
+            "log": log + ["Escalated: refund requested to a different payment method"]
+        }
+
     reply_parts = []
     actions_taken = []
     needs_escalation = False
@@ -135,7 +177,6 @@ def build_response(pnr, message):
             )
             log.append("Denied full-night stay")
 
-    # --- FIX 1 continued: goodwill/free compensation requests must escalate, never be auto-handled ---
     if "goodwill_compensation_request" in intents:
         reply_parts.append(
             "I understand you'd like additional compensation, but I'm not authorized to approve "
@@ -147,7 +188,6 @@ def build_response(pnr, message):
         log.append("Escalated: customer requested free/goodwill compensation beyond policy (e.g. free upgrade)")
 
     if "fare_upgrade" in intents:
-        # --- FIX 2: handle comma-separated numbers like "2,000" correctly ---
         numbers = re.findall(r'\d{1,3}(?:,\d{3})+|\d+', message)
         fare_diff = int(numbers[-1].replace(",", "")) if numbers else None
 
